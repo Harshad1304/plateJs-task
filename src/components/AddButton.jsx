@@ -1,250 +1,238 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from "react";
 
-const AddButton = ({ editor }) => {
+const AddButton = ({ editor, onOpenDialog, showDialog }) => {
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const [isVisible, setIsVisible] = useState(false);
-  const [showDialog, setShowDialog] = useState(false);
-  const [question, setQuestion] = useState('');
-  const [options, setOptions] = useState(['', '', '', '']);
-  const [selectedOption, setSelectedOption] = useState(null);
+  
+  const positionUpdateTimeoutRef = useRef(null);
+  const lastPositionRef = useRef({ top: 0, left: 0 });
+
+  const updatePosition = useCallback(() => {
+    if (!editor || showDialog) {
+      setIsVisible(false);
+      return;
+    }
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      setIsVisible(false);
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    if (!range) {
+      setIsVisible(false);
+      return;
+    }
+
+    // Check if selection is within the editor
+    const editorElement = document.querySelector("[data-slate-editor]");
+    if (!editorElement || !editorElement.contains(range.commonAncestorContainer)) {
+      setIsVisible(false);
+      return;
+    }
+
+    // Additional check: See if current selection is within an MCQ element using editor value
+    try {
+      const editorValue = editor.children;
+      const currentPath = editor.selection?.anchor?.path;
+      
+      if (currentPath && currentPath.length > 0) {
+        // Check if the current path leads to an MCQ element
+        let currentNode = editorValue;
+        for (let i = 0; i < currentPath.length; i++) {
+          if (currentNode && currentNode[currentPath[i]]) {
+            currentNode = currentNode[currentPath[i]];
+            if (currentNode && currentNode.type === 'mcq') {
+              console.log('Hiding button: MCQ element detected via editor value');
+              setIsVisible(false);
+              return;
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.log('Error checking editor value for MCQ:', error);
+    }
+
+    // Check if cursor is on an MCQ element
+    let currentNode = range.commonAncestorContainer;
+    let isOnMCQElement = false;
+    
+    // First, check if we're directly inside an MCQ element
+    if (currentNode.nodeType === Node.ELEMENT_NODE) {
+      const element = currentNode;
+      if (element.getAttribute('data-slate-element') === 'mcq' || 
+          element.classList.contains('mcq-element') ||
+          element.getAttribute('data-mcq') === 'true') {
+        isOnMCQElement = true;
+      }
+    }
+    
+    // If not directly on MCQ element, traverse up the DOM tree
+    if (!isOnMCQElement) {
+      while (currentNode && currentNode !== editorElement) {
+        if (currentNode.nodeType === Node.ELEMENT_NODE) {
+          const element = currentNode;
+          
+          // Check multiple ways to identify MCQ elements
+          const isMCQElement = 
+            element.getAttribute('data-slate-element') === 'mcq' ||
+            element.closest('[data-slate-element="mcq"]') ||
+            element.classList.contains('mcq-element') ||
+            element.closest('.mcq-element') ||
+            element.getAttribute('data-mcq') === 'true' ||
+            element.closest('[data-mcq="true"]') ||
+            // Check if the element contains MCQ-specific content
+            element.textContent?.includes('Submit Answer') ||
+            element.querySelector('input[type="radio"]') !== null ||
+            // Additional checks for MCQ elements
+            element.querySelector('[class*="mcq"]') !== null;
+          
+          if (isMCQElement) {
+            console.log('MCQ element detected, hiding button');
+            isOnMCQElement = true;
+            break;
+          }
+        }
+        currentNode = currentNode.parentNode;
+      }
+    }
+
+    // Hide button if on MCQ element
+    if (isOnMCQElement) {
+      console.log('Hiding button: MCQ element detected');
+      setIsVisible(false);
+      return;
+    }
+
+    // Debug: Log when button should be visible
+
+    // Get the selection rectangle
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      // Collapsed selection (just cursor), try to get position from a text node
+      const textNode = range.startContainer;
+      if (textNode.nodeType === Node.TEXT_NODE && textNode.parentNode) {
+        const tempRange = document.createRange();
+        tempRange.setStart(textNode, range.startOffset);
+        tempRange.setEnd(textNode, range.startOffset);
+        const tempRect = tempRange.getBoundingClientRect();
+        if (tempRect.width > 0 || tempRect.height > 0) {
+          rect.top = tempRect.top;
+          rect.left = tempRect.left;
+          rect.width = tempRect.width;
+          rect.height = tempRect.height;
+        }
+      }
+    }
+
+    // Validate rectangle dimensions
+    if (rect.width === 0 && rect.height === 0) {
+      setIsVisible(false);
+      return;
+    }
+
+    const editorRect = editorElement.getBoundingClientRect();
+    
+    // Calculate position relative to the editor
+    const newPosition = {
+      top: rect.top - editorRect.top + rect.height,
+      left: rect.left - editorRect.left + rect.width,
+    };
+
+    // Only update if position has actually changed significantly (performance optimization)
+    const positionChanged = Math.abs(newPosition.top - lastPositionRef.current.top) > 1 || 
+                           Math.abs(newPosition.left - lastPositionRef.current.left) > 1;
+    
+    if (positionChanged) {
+      setPosition(newPosition);
+      lastPositionRef.current = newPosition;
+      setIsVisible(true);
+    }
+  }, [editor, showDialog]);
 
   useEffect(() => {
     if (!editor) return;
 
-    const updatePosition = () => {
-      const selection = window.getSelection();
-      if (selection && selection.rangeCount > 0) {
-        const range = selection.getRangeAt(0);
-        const rect = range.getBoundingClientRect();
-        
-        const editorElement = document.querySelector('[data-slate-editor]');
-        if (editorElement) {
-          const editorRect = editorElement.getBoundingClientRect();
-          
-          setPosition({
-            top: rect.top - editorRect.top + rect.height,
-            left: rect.left - editorRect.left
-          });
-          setIsVisible(true);
-        }
-      } else {
-        setIsVisible(false);
+    // Debounced position update for better performance
+    const debouncedUpdatePosition = () => {
+      if (positionUpdateTimeoutRef.current) {
+        clearTimeout(positionUpdateTimeoutRef.current);
       }
+      positionUpdateTimeoutRef.current = setTimeout(updatePosition, 10);
     };
 
     const handleSelectionChange = () => {
-      updatePosition();
+      debouncedUpdatePosition();
     };
 
     const handleScroll = () => {
-      updatePosition();
+      debouncedUpdatePosition();
     };
 
-    document.addEventListener('selectionchange', handleSelectionChange);
-    document.addEventListener('scroll', handleScroll);
+    const handleResize = () => {
+      debouncedUpdatePosition();
+    };
+
+    const handleKeyDown = () => {
+      debouncedUpdatePosition();
+    };
+
+    const handleMouseUp = () => {
+      debouncedUpdatePosition();
+    };
+
+    // Add event listeners
+    document.addEventListener("selectionchange", handleSelectionChange);
+    document.addEventListener("scroll", handleScroll, { passive: true });
+    window.addEventListener("resize", handleResize);
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    // Initial position update
+    updatePosition();
 
     return () => {
-      document.removeEventListener('selectionchange', handleSelectionChange);
-      document.removeEventListener('scroll', handleScroll);
+      document.removeEventListener("selectionchange", handleSelectionChange);
+      document.removeEventListener("scroll", handleScroll);
+      window.removeEventListener("resize", handleResize);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("mouseup", handleMouseUp);
+      
+      if (positionUpdateTimeoutRef.current) {
+        clearTimeout(positionUpdateTimeoutRef.current);
+      }
     };
-  }, [editor]);
+  }, [editor, updatePosition]);
 
   const handleClick = () => {
-    setShowDialog(true);
-  };
-
-  const closeDialog = () => {
-    setShowDialog(false);
-    setQuestion('');
-    setOptions(['', '', '', '']);
-    setSelectedOption(null);
-  };
-
-  const handleOptionChange = (index, value) => {
-    const newOptions = [...options];
-    newOptions[index] = value;
-    setOptions(newOptions);
-  };
-
-  // Test function to verify editor is working
-  const testEditor = () => {
-    if (editor) {
-      console.log('Editor exists:', editor);
-      try {
-        editor.insertText('Test text from editor!');
-        console.log('Test text inserted successfully');
-      } catch (error) {
-        console.error('Error inserting test text:', error);
-      }
-    } else {
-      console.log('Editor is null or undefined');
-    }
-  };
-
-  const insertMCQContent = () => {
-    if (!editor || !question.trim()) return;
-
-    const validOptions = options.filter(option => option.trim());
-    const correctAnswer = selectedOption;
-    
-    console.log('Attempting to insert MCQ content:', { question, validOptions, correctAnswer });
-    
-    try {
-      // Create MCQ element
-      const mcqElement = {
-        type: 'mcq',
-        question: question,
-        options: validOptions,
-        correctAnswer: correctAnswer,
-        children: [{ text: '' }]
-      };
-      
-      // Insert the MCQ element
-      editor.insertNode(mcqElement);
-      editor.insertBreak();
-      
-      console.log('MCQ element inserted successfully');
-      
-    } catch (error) {
-      console.error('Error inserting MCQ element:', error);
-      // Fallback: insert as plain text
-      const fullText = `\n\nMCQ Question:\n${question}\n\nOptions:\n${validOptions
-        .map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`)
-        .join('\n')}\n\nCorrect Answer: ${String.fromCharCode(65 + selectedOption)}. ${validOptions[selectedOption]}\n\n`;
-      
-      editor.insertText(fullText);
-    }
-  };
-
-  const handleSubmit = () => {
-    if (question.trim() && selectedOption !== null) {
-      console.log('Question:', question);
-      console.log('Options:', options);
-      console.log('Selected Option:', options[selectedOption]);
-      
-      // Insert the MCQ content into the editor
-      insertMCQContent();
-      
-      // Close the dialog
-      closeDialog();
-    }
+    onOpenDialog();
   };
 
   if (!isVisible) return null;
+  
 
   return (
     <>
       <div
         style={{
-          position: 'absolute',
-          top: `${position.top-10}px`,
-          left: `${position.left-40}px`,
-          zIndex: 1000, 
-          transform: 'translateY(-50%)',
+          position: "absolute",
+          top: `${position.top - 10}px`,
+          left: `${position.left + 5}px`,
+          zIndex: 1000,
+          transform: "translateY(-50%)",
         }}
-        className="bg-white border border-gray-300 rounded-full shadow-lg hover:shadow-xl transition-shadow duration-200"
+        className="bg-white border border-gray-300 rounded-full shadow-lg hover:shadow-xl transition-all duration-200 ease-out"
       >
         <button
           onClick={handleClick}
-          className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors duration-200"
+          className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+          aria-label="Add MCQ question"
         >
           +
         </button>
       </div>
-
-      {/* Test button for debugging */}
-      <div
-        style={{
-          position: 'fixed',
-          top: '10px',
-          right: '10px',
-          zIndex: 1001,
-        }}
-      >
-        <button
-          onClick={testEditor}
-          className="bg-red-500 text-white px-3 py-1 rounded text-sm"
-        >
-          Test Editor
-        </button>
-      </div>
-
-      {/* Question Dialog */}
-      {showDialog && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold">Add MCQ Question</h3>
-              <button
-                onClick={closeDialog}
-                className="text-gray-400 hover:text-gray-600"
-              >
-                ✕
-              </button>
-            </div>
-            
-            <div className="space-y-4">
-              {/* Question Input */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Question:
-                </label>
-                <textarea
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
-                  placeholder="Enter your question here..."
-                  className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-                  rows="3"
-                />
-              </div>
-
-              {/* Options */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Options:
-                </label>
-                <div className="space-y-2">
-                  {options.map((option, index) => (
-                    <div key={index} className="flex items-center space-x-3">
-                      <input
-                        type="radio"
-                        name="option"
-                        id={`option-${index}`}
-                        checked={selectedOption === index}
-                        onChange={() => setSelectedOption(index)}
-                        className="text-blue-600 focus:ring-blue-500"
-                      />
-                      <input
-                        type="text"
-                        value={option}
-                        onChange={(e) => handleOptionChange(index, e.target.value)}
-                        placeholder={`Option ${index + 1}`}
-                        className="flex-1 p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end space-x-2 mt-6">
-              <button
-                onClick={closeDialog}
-                className="px-4 py-2 text-gray-600 hover:text-gray-800"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSubmit}
-                disabled={!question.trim() || selectedOption === null}
-                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
-              >
-                Add MCQ
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 };
