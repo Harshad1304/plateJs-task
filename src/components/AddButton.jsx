@@ -44,7 +44,6 @@ const AddButton = ({ editor, onOpenDialog, showDialog }) => {
           if (currentNode && currentNode[currentPath[i]]) {
             currentNode = currentNode[currentPath[i]];
             if (currentNode && currentNode.type === 'mcq') {
-              console.log('Hiding button: MCQ element detected via editor value');
               setIsVisible(false);
               return;
             }
@@ -90,7 +89,6 @@ const AddButton = ({ editor, onOpenDialog, showDialog }) => {
             element.querySelector('[class*="mcq"]') !== null;
           
           if (isMCQElement) {
-            console.log('MCQ element detected, hiding button');
             isOnMCQElement = true;
             break;
           }
@@ -101,7 +99,6 @@ const AddButton = ({ editor, onOpenDialog, showDialog }) => {
 
     // Hide button if on MCQ element
     if (isOnMCQElement) {
-      console.log('Hiding button: MCQ element detected');
       setIsVisible(false);
       return;
     }

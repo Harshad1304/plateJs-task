@@ -16,7 +16,6 @@ export default function App() {
   });
 
   const insertMCQContent = (formData) => {
-    console.log('Attempting to insert MCQ:', formData);
     
     try {
       // Filter out empty options
@@ -31,13 +30,10 @@ export default function App() {
         children: [{ text: '' }]
       };
       
-      console.log('MCQ node to insert:', mcqNode);
       
       // Insert the MCQ node at the current selection
       editor.insertNode(mcqNode);
 
-      // Move cursor after the inserted MCQ
-      editor.moveForward();      
     } catch (error) {
       console.error(error);
     }
@@ -59,9 +55,8 @@ export default function App() {
           className='bg-amber-100 min-h-screen w-full  pt-32 px-20'
           placeholder="Type your amazing content here..."
           renderElement={(props) => {
-            console.log('Rendering element:', props.element);
             if (props.element.type === 'mcq') {
-              console.log('Rendering MCQ element:', props.element);
+             
               return <MCQElement {...props} />;
             }
             return <div {...props.attributes}>{props.children}</div>;
